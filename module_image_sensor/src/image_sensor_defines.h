@@ -7,10 +7,12 @@ enum commands {CONFIG, GET_FRAME};
 // Sensor registers
 #define DEV_ADDR 0x48   // Seven most significant bits of 0x90 and 0x91
 #define RESET_REG 0x0C
+#define CHIP_VERSION_REG  0x00
 #define CHIP_CNTL_REG 0x07
 #define WIN_HEIGHT_REG 0x03
 #define WIN_WIDTH_REG 0x04
 #define HOR_BLANK_REG 0x05
+#define VER_BLANK_REG 0x06
 #define ROW_START_REG 0x02
 #define COL_START_REG 0x01
 
