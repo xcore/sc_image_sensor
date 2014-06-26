@@ -6,10 +6,9 @@
 #include "display_controller.h"
 #include "image_sensor.h"
 
-
 // Port declaration
 on tile[1] : image_sensor_ports imgports = { //circle slot
-   XS1_PORT_1J, XS1_PORT_1K, XS1_PORT_1L, XS1_PORT_16B,
+   XS1_PORT_1J, XS1_PORT_1K, XS1_PORT_1L, XS1_PORT_8C,
    {XS1_PORT_1H, XS1_PORT_1I, 1000}, XS1_CLKBLK_1
 };
 on tile[0] : lcd_ports lcdports = { //triangle slot
@@ -40,6 +39,7 @@ void app(streaming chanend c_img, chanend c_dc){
         delay_milliseconds(10);   // To remove flicker
 
     }
+
 }
 
 
