@@ -4,6 +4,7 @@
 #include "image_sensor_defines.h"
 #include "display_controller.h"
 
+// Width should be a multiple of 4
 void image_sensor_set_capture_window(streaming chanend c_imgSensor, unsigned height, unsigned width){
     c_imgSensor <: (unsigned)CONFIG;
     c_imgSensor <: height;
