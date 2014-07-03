@@ -20,7 +20,7 @@ enum commands {CONFIG, GET_FRAME};
 
 #define AEC_AGC_ENABLE_REG 0xAF
 #define AEC 0
-#define AGC 1   // Disable AGC in sunlight. Enable AGC in artificial light and adjust DIG_GAIN.
+#define AGC 0   // Disable AGC in sunlight. Enable AGC in artificial light and adjust DIG_GAIN.
 
 #define DIG_GAIN_REG_START 0x80
 #define DIG_GAIN_REG_END 0x98

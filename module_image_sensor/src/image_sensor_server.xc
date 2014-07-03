@@ -4,6 +4,7 @@
 #include "image_sensor_defines.h"
 #include "i2c.h"
 
+
 static inline void config_data_port(struct image_sensor_ports &imgports){
 
     configure_clock_src(imgports.clk1, imgports.pix_clk);   // Port clock setup

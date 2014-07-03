@@ -17,7 +17,7 @@ typedef struct image_sensor_ports{
 // Function prototypes
 void image_sensor_server(image_sensor_ports &imgports, streaming chanend c_imgSensor);
 void image_sensor_set_capture_window(streaming chanend c_imgSensor, unsigned height, unsigned width);
-void image_sensor_get_frame(streaming chanend c_imgSensor, chanend c_dispCont, unsigned frBuf, unsigned height, unsigned width);
+void image_sensor_get_frame(streaming chanend c_imgSensor, chanend c_sdram, unsigned SDRAMfrBufBank, unsigned SDRAMfrBufRow, unsigned height, unsigned width);
 
 
 

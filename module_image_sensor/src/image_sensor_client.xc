@@ -2,9 +2,8 @@
 
 #include "image_sensor.h"
 #include "image_sensor_defines.h"
-#include "display_controller.h"
+#include "sdram.h"
 
-// Width should be a multiple of 4
 void image_sensor_set_capture_window(streaming chanend c_imgSensor, unsigned height, unsigned width){
     c_imgSensor <: (unsigned)CONFIG;
     c_imgSensor <: height;
@@ -22,9 +21,12 @@ inline unsafe void get_row(streaming chanend c, unsigned * unsafe dataPtr, unsig
 
 
 #pragma unsafe arrays
-inline unsafe void store_row (chanend c_dc, unsigned row, unsigned frBuf, intptr_t buf){
-    display_controller_image_write_line_p(c_dc, row, frBuf, buf);
-    display_controller_wait_until_idle_p(c_dc, buf);
+inline unsafe void store_row (chanend c_sdram, unsigned row, unsigned width, unsigned SDRAMfrBufBank, unsigned SDRAMfrBufRow, intptr_t buf){
+    unsigned widthWords = width/2;
+    unsigned rowIncrement = (width/SDRAM_COL_COUNT)+1;
+    unsigned startRow = SDRAMfrBufRow + row*rowIncrement;
+    sdram_buffer_write_p(c_sdram, SDRAMfrBufBank, startRow, 0, widthWords, buf);
+    sdram_wait_until_idle_p(c_sdram,buf);
 }
 
 
@@ -33,30 +35,49 @@ inline unsigned short rgb888_to_rgb565(char b, char g, char r) {
 }
 
 #pragma unsafe arrays
-void color_interpolation(chanend c_dc, unsigned frBuf, unsigned height, unsigned width){
+void color_interpolation(chanend c_sdram, unsigned SDRAMfrBufBank, unsigned SDRAMfrBufRow, unsigned height, unsigned width){
     unsigned buf[3][MAX_WIDTH/2], rgb565[MAX_WIDTH/2];
     char r[MAX_WIDTH], g[MAX_WIDTH], b[MAX_WIDTH];
+    intptr_t bufferPtr;
+    unsigned startRow;
+
+    unsigned widthWords = width/2;
+    unsigned rowIncrement = (width/SDRAM_COL_COUNT)+1;
 
     // Read first two rows
-    display_controller_image_read_line(c_dc, 0, frBuf, buf[0]);
-    display_controller_wait_until_idle(c_dc, buf[0]);
-    display_controller_image_read_line(c_dc, 1, frBuf, buf[1]);
-    display_controller_wait_until_idle(c_dc, buf[1]);
+    asm("mov %0, %1" : "=r"(bufferPtr) : "r"(buf[0]));
+    startRow = SDRAMfrBufRow;
+    sdram_buffer_read_p(c_sdram, SDRAMfrBufBank, startRow, 0, widthWords, bufferPtr);
+    sdram_wait_until_idle_p(c_sdram,bufferPtr);
+
+    asm("mov %0, %1" : "=r"(bufferPtr) : "r"(buf[1]));
+    startRow = SDRAMfrBufRow + rowIncrement;
+    sdram_buffer_read_p(c_sdram, SDRAMfrBufBank, startRow, 0, widthWords, bufferPtr);
+    sdram_wait_until_idle_p(c_sdram,bufferPtr);
 
     // Store first and last rows with 0s
     for (unsigned j=0; j<width/2; j++)
         rgb565[j]=0;
-    display_controller_image_write_line(c_dc, 0, frBuf, rgb565);
-    display_controller_wait_until_idle(c_dc, rgb565);
-    display_controller_image_write_line(c_dc, height-1, frBuf, rgb565);
-    display_controller_wait_until_idle(c_dc, rgb565);
+
+    asm("mov %0, %1" : "=r"(bufferPtr) : "r"(rgb565));
+    startRow = SDRAMfrBufRow;
+    sdram_buffer_write_p(c_sdram, SDRAMfrBufBank, startRow, 0, widthWords, bufferPtr);
+    sdram_wait_until_idle_p(c_sdram,bufferPtr);
+
+    asm("mov %0, %1" : "=r"(bufferPtr) : "r"(rgb565));
+    startRow = SDRAMfrBufRow + (height-1)*rowIncrement;
+    sdram_buffer_write_p(c_sdram, SDRAMfrBufBank, startRow, 0, widthWords, bufferPtr);
+    sdram_wait_until_idle_p(c_sdram,bufferPtr);
+
 
     // Find missing color components
     for (unsigned i=2; i<height; i++){
         unsigned row = i-1;
 
-        display_controller_image_read_line(c_dc, i, frBuf, buf[i%3]);
-        display_controller_wait_until_idle(c_dc, buf[i%3]);
+        asm("mov %0, %1" : "=r"(bufferPtr) : "r"(buf[i%3]));
+        unsigned startRow = SDRAMfrBufRow + i*rowIncrement;
+        sdram_buffer_read_p(c_sdram, SDRAMfrBufBank, startRow, 0, widthWords, bufferPtr);
+        sdram_wait_until_idle_p(c_sdram,bufferPtr);
 
         if (row&1){
             for (unsigned j=1; j<width-1; j+=2){    // odd row, odd col, green pix
@@ -107,23 +128,25 @@ void color_interpolation(chanend c_dc, unsigned frBuf, unsigned height, unsigned
             }
         }
 
+
         // RGB565 conversion and write row
         for (unsigned j=1; j<width-1; j++)
             (rgb565,unsigned short[])[j] = rgb888_to_rgb565(b[j], g[j]*GREEN_REDUCTION_FACTOR_NUM/GREEN_REDUCTION_FACTOR_DEN, r[j]);     // 8/10 is for white balancing since the output looks greenish
 
-
         (rgb565,unsigned short[])[0] = 0;
         (rgb565,unsigned short[])[width-1] = 0;
 
-        display_controller_image_write_line(c_dc, row, frBuf, rgb565);
-        display_controller_wait_until_idle(c_dc, rgb565);
+        asm("mov %0, %1" : "=r"(bufferPtr) : "r"(rgb565));
+        sdram_buffer_write_p(c_sdram, SDRAMfrBufBank, startRow-rowIncrement, 0, widthWords, bufferPtr);
+        sdram_wait_until_idle_p(c_sdram,bufferPtr);
+
     }
 
 }
 
 
 #pragma unsafe arrays
-void image_sensor_get_frame(streaming chanend c_imgSensor, chanend c_dispCont, unsigned frBuf, unsigned height, unsigned width){
+void image_sensor_get_frame(streaming chanend c_imgSensor, chanend c_sdram, unsigned SDRAMfrBufBank, unsigned SDRAMfrBufRow, unsigned height, unsigned width){
     unsigned data1[MAX_WIDTH/4], data2[MAX_WIDTH/4];
     unsigned * unsafe tempPtr, * unsafe readBufPtr, * unsafe storeBufPtr;
 
@@ -142,16 +165,15 @@ void image_sensor_get_frame(streaming chanend c_imgSensor, chanend c_dispCont, u
 
             par {
                 get_row (c_imgSensor,readBufPtr,width);
-                store_row(c_dispCont,r-1,frBuf,(intptr_t)storeBufPtr);
+                store_row(c_sdram,r-1,width,SDRAMfrBufBank,SDRAMfrBufRow,(intptr_t)storeBufPtr);
             }
         }
 
-        store_row(c_dispCont,height-1,frBuf,(intptr_t)readBufPtr);
+        store_row(c_sdram,height-1,width,SDRAMfrBufBank,SDRAMfrBufRow,(intptr_t)readBufPtr);
     }
 
     // Color interpolation
-
-    color_interpolation(c_dispCont, frBuf, height, width);
+    color_interpolation(c_sdram, SDRAMfrBufBank, SDRAMfrBufRow, height, width);
 
 }
 
