@@ -21,14 +21,16 @@ typedef struct img_snsr_slave_mode_ports{
 
 typedef enum image_sensor_opt_modes {
   MASTER_MODE,
-  SNAPSHOT_MODE,
-  SLAVE_MODE
+  SLAVE_MODE,
+  SNAPSHOT_MODE
 }image_sensor_opt_modes_t;
 
+
 // Function prototypes
-void image_sensor_server(image_sensor_ports &imgports, streaming chanend c_imgSensor, streaming chanend c_imgSlave,image_sensor_opt_modes_t mode);
+void image_sensor_server(struct image_sensor_ports &imgports, img_snsr_slave_mode_ports &imgports_slave,
+                         streaming chanend c_imgSensor,image_sensor_opt_modes_t mode);
 void image_sensor_set_capture_window(streaming chanend c_imgSensor, unsigned height, unsigned width);
-void image_sensor_get_frame(streaming chanend c_imgSensor, chanend c_dispCont, unsigned frBuf, unsigned height, unsigned width);
+void image_sensor_get_frame(streaming chanend c_imgSensor, chanend c_dispCont, unsigned frBuf, unsigned height, unsigned width,image_sensor_opt_modes_t mode);
 
 
 
