@@ -1,1 +1,6 @@
 Image Sensor Module.
+
+This is a master mode image sensor module used to capture an image frame without the frame valid sync line. 
+It checks the vertical blanking period with line valid and pix clk.
+The important requirement is the line valid high time should be more than its low time in horizontal blanking.
+
