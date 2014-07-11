@@ -1,15 +1,22 @@
+#include <xs1.h>
 #include <timer.h>
 #include <print.h>
+#include <platform.h>
 
 #include "image_sensor.h"
 #include "image_sensor_defines.h"
 #include "i2c.h"
 
 
-static inline void config_data_port(struct image_sensor_ports &imgports){
+static inline void config_data_port(struct image_sensor_ports &imgports,image_sensor_opt_modes_t mode){
 
     configure_clock_src(imgports.clk1, imgports.pix_clk);   // Port clock setup
-    configure_in_port_strobed_slave(imgports.data_port, imgports.line_valid, imgports.clk1);
+    if(mode == SLAVE_MODE) {
+      configure_in_port(imgports.data_port,imgports.clk1);
+      configure_in_port(imgports.line_valid,imgports.clk1);
+    }else if(mode == MASTER_MODE)
+      configure_in_port_strobed_slave(imgports.data_port, imgports.line_valid, imgports.clk1);
+
     start_clock(imgports.clk1);
 
 }
@@ -117,51 +124,120 @@ static inline unsigned do_input(in buffered port:32 data_port) {
   asm volatile("in %0, res[%1]":"=r"(data):"r"(data_port));
   return data;
 }
+/********************************************************************************************
+ * As per datasheet (Page No. 49,Figure 18) slave mode operation is carried out based on the
+ * clock cycles at which the input pins of the sensor is triggered.
+ * Pins used : EXPOSURE, STFRM_OUT, STLN_OUT
+ * As mentioned in datasheet Vertical Blank (context A) is set to 4.
+ * STLN_OUT is maintained as much as near to LINE_VALID values.i.e similary to it.
+ * EXPOSURE : |```````````````|___________________________________________
+ * STFRM_OUT: ______________________________|````````````````|___________
+ * STLN_OUT : ________________________________________|``````````````|__|``````````````|__|```
+ *
+ *          : |<------- Integration Time --------->|<------- Vertical Blanking --------- >|
+ * ---------------------------------------------------------------------------------------- *
+ * Pixel Integration Control (Page No. 52)
+ * Total Integration Time = (No. of rows of integration x row time) +
+ *                          (No. of pixels of integration x pixel time)
+ * No. of rows of integration = R0x0B => Coarse Shutter Width 1 Context A = 480
+ * No. of pixels of Integration = R0xD5 => Fine Shutter Width Total Context A = 0
+ * Row Timing = (R0x04 + R0x05) master clock periods = (480 + 220) = 700 master clock periods
+ * pixel time = pixel clock = 25MHz = 40nSec
+ * Integration Time = (480 x 846) + (0 x 40nSec) = (406080) master clock period = 16243.2uSec
+ * ---------------------------------------------------------------------------------------- *
+ * STLN_OUT time is approximately equal to LINE_VALID time (Page No. 13, Figure 8, Table 4)
+ * Row Timing = (R0x04 + R0x05) master clock periods = (752 + 94) = 846 master clock periods
+ * Active data time (ON Time) = 752 pixel clocks = 30.08uSec = 3008 ticks
+ * Horizontal blanking (OFF Time) = 94 pixel clocks = 3.76uSec = 376 ticks
+ * ---------------------------------------------------------------------------------------- *
+ * Consider EXPOSURE Time (half of Integration Time) = (16243.2/2) = 8121.6uSec = 812160 ticks
+ * Assuimng STFRM_OUT Time as 25% Integration Time = (16243.2x0.25) = 4060.8uSec = 406080 ticks
+ *******************************************************************************************/
+void trigger_exposure_stfrm_out(img_snsr_slave_mode_ports &imgports_slave)
+{
+    timer slv_tmr;
+    unsigned tick = 0;
 
+    imgports_slave.exposure  <: 1;
+    slv_tmr :> tick;
 
-void image_sensor_server(struct image_sensor_ports &imgports, streaming chanend c_imgSensor, streaming chanend c_imgSlave,image_sensor_opt_modes_t mode){
+    slv_tmr when timerafter(tick+812160) :> tick;        //812160
+    imgports_slave.exposure  <: 0;
+
+    slv_tmr when timerafter(tick+609120) :> tick;        //609120
+    imgports_slave.stfrm_out <: 1;
+
+    slv_tmr when timerafter(tick+404576) :> tick;        //404670
+    imgports_slave.stln_out  <: 1; // vertical blanking period
+
+    slv_tmr when timerafter(tick+1504) :> tick;           //1504
+    imgports_slave.stfrm_out <: 0;
+
+    slv_tmr when timerafter(tick+1504) :> tick;           //1410 //960
+    imgports_slave.stln_out  <: 0;
+
+    slv_tmr when timerafter(tick+880) :> tick;           //352 //880
+    for(int i = 0; i < 5; i++) {
+      imgports_slave.stln_out  <: 1;
+      slv_tmr when timerafter(tick+3008) :> tick;          //2820 //1920
+
+      imgports_slave.stln_out  <: 0;
+      slv_tmr when timerafter(tick+880) :> tick;           //352 //880
+    }
+}
+void image_sensor_server(struct image_sensor_ports &imgports, img_snsr_slave_mode_ports &imgports_slave,
+                         streaming chanend c_imgSensor,image_sensor_opt_modes_t mode)
+{
     unsigned cmd;
     unsigned height, width;
+    unsigned n_data = 0;
 
     // Initialization
-    config_data_port(imgports);
+    if(mode == SLAVE_MODE)
+      configure_out_port(imgports_slave.stln_out, imgports.clk1,0);
+
+    config_data_port(imgports,mode);
     i2c_master_init(imgports.i2c_ports);
     init_registers(imgports,mode);
 
-    while (1){
 
-        c_imgSensor :> cmd;
+    /* Wait for configuration data to be received from client */
+    c_imgSensor :> cmd;
+    c_imgSensor :> height;
+    c_imgSensor :> width;
+    config_registers(imgports,height,width);
 
-        if (cmd==CONFIG) {
+    while(1) {
+      c_imgSensor :> cmd;
+      if(mode == SLAVE_MODE) {
+        clearbuf(imgports.data_port);
+        trigger_exposure_stfrm_out(imgports_slave);
 
-                c_imgSensor :> height;
-                c_imgSensor :> width;
-
-                config_registers(imgports,height,width);
-
-        } else {
-
-                unsigned n_data = height*width/2;
-                unsigned i=0;
-
-                if(mode == SLAVE_MODE) {
-                  c_imgSlave <: cmd;
-                  c_imgSlave :> int ack;
-                }
-                else {
-                  imgports.frame_valid when pinseq(0) :> void;
-                  imgports.frame_valid when pinseq(1) :> void; // wait for a valid frame
-                }
-
-                clearbuf(imgports.data_port);
-                for (; i<n_data; i++){
-                    unsigned data = do_input(imgports.data_port);
-                    c_imgSensor <: data;
-                }
-
-                c_imgSlave <: 0;  // this will avoid burst of stln_out triggering, even after line is captured
+        for(unsigned l=0; l<height; l++) {
+          imgports_slave.stln_out <: 1;
+          delay_microseconds(9);
+          for (unsigned i=0; i<width/4; i++) {
+            unsigned data = do_input(imgports.data_port);
+            c_imgSensor <: data;
+          }
+          imgports_slave.stln_out <: 0;
+          delay_microseconds(22);
         }
+        imgports_slave.stln_out <: 0;
+      }
+      else // master mode
+      {
+        n_data = (height*width)/4;
+        unsigned i=0;
 
+        imgports.frame_valid when pinseq(0) :> void;
+        imgports.frame_valid when pinseq(1) :> void; // wait for a valid frame
+
+        clearbuf(imgports.data_port);
+        for (; i<n_data; i++){
+          unsigned data = do_input(imgports.data_port);
+          c_imgSensor <: data;
+        }
+      }
     }
-
 }
